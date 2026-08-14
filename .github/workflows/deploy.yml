@@ -22,16 +22,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Debug GitHub OIDC claims
+      - name: Debug GitHub OIDC claims
+        run: |
+          echo "======================================"
+          echo "GitHub OIDC Debug Information"
+          echo "======================================"
+
+          echo "Repository: ${{ github.repository }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Branch: ${{ github.ref_name }}"
+
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r '.value')
+
+          echo "OIDC token received successfully"
+
+          echo "$TOKEN" | cut -d '.' -f2 | base64 -d 2>/dev/null | jq '{
+            iss: .iss,
+            aud: .aud,
+            sub: .sub
+          }'
+
+          echo "======================================"
+
+      # Authenticate to AWS using GitHub OIDC
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::447343943134:role/github-ecr-access
           aws-region: ${{ env.AWS_REGION }}
 
+      # Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # Build and push Docker image
       - name: Build, tag, and push Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -39,11 +67,14 @@ jobs:
         run: |
           echo "Building Docker image..."
 
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            .
 
           echo "Pushing Docker image to ECR..."
 
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
           echo "Image pushed successfully:"
           echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
