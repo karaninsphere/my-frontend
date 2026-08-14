@@ -1,52 +1,108 @@
-name: Debug GitHub OIDC
+name: Build and Push Docker Image to ECR
 
 on:
   push:
     branches:
       - main
 
+  workflow_dispatch:
+
 permissions:
   id-token: write
   contents: read
 
+env:
+  AWS_REGION: ap-southeast-2
+  AWS_ACCOUNT_ID: "447343943134"
+  ECR_REPOSITORY: my-frontend
+
 jobs:
-  debug:
+  build-and-push:
+    name: Build and Push to Amazon ECR
     runs-on: ubuntu-latest
 
     steps:
-      - name: Show GitHub information
+
+      # --------------------------------------------------
+      # Checkout source code
+      # --------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # Configure AWS credentials using GitHub OIDC
+      # --------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::447343943134:role/github-ecr-access
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-ECR
+
+      # --------------------------------------------------
+      # Verify AWS authentication
+      # --------------------------------------------------
+      - name: Verify AWS identity
         run: |
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Repository ID: ${{ github.event.repository.id }}"
-          echo "Owner: ${{ github.repository_owner }}"
-          echo "Owner ID: ${{ github.repository_owner_id }}"
-          echo "Ref: $GITHUB_REF"
-          echo "Branch: $GITHUB_REF_NAME"
+          echo "Checking AWS identity..."
+          aws sts get-caller-identity
 
-      - name: Get OIDC token
+      # --------------------------------------------------
+      # Login to Amazon ECR
+      # --------------------------------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # --------------------------------------------------
+      # Build Docker image
+      # --------------------------------------------------
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          RESPONSE=$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL")
+          echo "Building Docker image..."
+          echo "Registry: $ECR_REGISTRY"
+          echo "Repository: $ECR_REPOSITORY"
+          echo "Tag: $IMAGE_TAG"
 
-          TOKEN=$(echo "$RESPONSE" | jq -r '.value')
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            .
 
-          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "Failed to get OIDC token"
-            exit 1
-          fi
+      # --------------------------------------------------
+      # Push Docker image to ECR
+      # --------------------------------------------------
+      - name: Push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Pushing Docker image to ECR..."
 
-          echo "OIDC token received"
+          docker push \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f2)
+          echo ""
+          echo "=========================================="
+          echo "Docker image pushed successfully"
+          echo "=========================================="
+          echo "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "=========================================="
 
-          case $((${#PAYLOAD} % 4)) in
-            2) PAYLOAD="${PAYLOAD}==" ;;
-            3) PAYLOAD="${PAYLOAD}=" ;;
-          esac
+      # --------------------------------------------------
+      # Verify image in ECR
+      # --------------------------------------------------
+      - name: Verify image in ECR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Checking image in ECR..."
 
-          echo "$PAYLOAD" | base64 -d 2>/dev/null | jq '{
-            iss: .iss,
-            aud: .aud,
-            sub: .sub
-          }'
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION"
+
+          echo "ECR image verification successful."
