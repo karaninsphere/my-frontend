@@ -26,6 +26,7 @@ jobs:
           role-to-assume: arn:aws:iam::447343943134:role/github-ecr-access
           aws-region: ap-southeast-2
           role-session-name: github-aws-test
+          audience: https://github.com/karaninsphere
 
       - name: Verify AWS credentials
         run: |
